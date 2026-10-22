@@ -1,0 +1,14 @@
+[
+  {
+    "path": "/profile.md",
+    "content": "---\nname: profile\ndescription: Who I am\n---\n- Freelance designer based in Lisbon\n- Works mostly with small e-commerce brands"
+  },
+  {
+    "path": "/preferences.md",
+    "content": "---\nname: preferences\ndescription: How I want Claude to work\n---\n- Keep answers short\n- British spelling in client documents"
+  },
+  {
+    "path": "/areas/acme.md",
+    "content": "---\nname: acme\ndescription: Acme Co. — website redesign client\n---\n- Launch planned for March\n- Brand colours: navy and orange"
+  }
+]

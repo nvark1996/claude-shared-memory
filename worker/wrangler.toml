@@ -1,0 +1,9 @@
+name = "shared-memory"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+
+# Filled in automatically by `npm run setup` (or paste the id from `npx wrangler d1 create shared-memory`).
+[[d1_databases]]
+binding = "DB"
+database_name = "shared-memory"
+database_id = "REPLACE_WITH_DATABASE_ID"
