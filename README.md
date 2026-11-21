@@ -100,6 +100,17 @@ This adds the hooks, an `.mcp.json` and a `CLAUDE.md` note. The URL is read from
 
 The repo's hooks run only in cloud sessions (`--remote-only`), so they never double up with the hooks on your computer.
 
+## Optional: reply check (every reply says what you need to do)
+
+Add `--reply-check` when you connect Claude Code:
+
+```bash
+node claude-code/install.mjs --reply-check                        # your computer
+node claude-code/install.mjs --repo /path/to/your/repo --reply-check   # a cloud repo
+```
+
+A Stop and SubagentStop hook then checks every reply from Claude and its subagents. A reply must end with `nothing needed.` on its own line, or contain a line starting with `Needed from you:` that says what you have to do. If it has neither, Claude is asked once to add the missing line before it finishes, so it can never loop. Change the wording with the `REPLY_CHECK_DONE` and `REPLY_CHECK_ACTION` environment variables. Re-running setup keeps the check on; `--no-reply-check` turns it off.
+
 ## Check it works
 
 - `curl -s "$BASE_URL/health"` prints `ok`.
@@ -139,6 +150,7 @@ claude-code/
   install.mjs               connects Claude Code (your computer, a cloud repo, or --uninstall)
   hooks/memory-start.mjs    SessionStart: loads memory into each session
   hooks/memory-sync.mjs     Stop: saves the session after every reply
+  hooks/reply-check.mjs     optional Stop/SubagentStop: every reply ends with what you need to do
 ```
 
 Not an official Anthropic project.

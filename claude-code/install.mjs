@@ -7,6 +7,9 @@
 //   For Claude Code in the cloud (run once per GitHub repo you use there, then commit + push):
 //     node install.mjs --repo /path/to/your/repo
 //
+//   Optional: add --reply-check to either command, so every reply must end with
+//   "nothing needed." or a "Needed from you: ..." line (see hooks/reply-check.mjs).
+//
 //   Remove from your computer:
 //     node install.mjs --uninstall
 
@@ -17,7 +20,12 @@ import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 
 const here = dirname(fileURLToPath(import.meta.url));
+const args = process.argv.slice(2);
+const replyCheck = args.includes("--reply-check");
 const HOOK_FILES = ["memory-start.mjs", "memory-sync.mjs"];
+// Keep the reply check on re-runs (e.g. npm run setup) unless --no-reply-check is passed.
+const wantsCheck = (settings) =>
+  replyCheck || (!args.includes("--no-reply-check") && JSON.stringify(settings.hooks || {}).includes("shared-memory/reply-check"));
 const MARK_START = "<!-- shared-memory:start -->";
 const MARK_END = "<!-- shared-memory:end -->";
 const isWindows = platform() === "win32";
@@ -37,7 +45,6 @@ const REPO_BLOCK = `
 This repo is connected to my shared memory (MCP server "shared-memory"), the same memory I use in Claude web and Claude Code on my computer. Read the relevant /areas/ file before working, update memory files when you learn durable facts, and call session_log with a short summary after meaningful work.
 `;
 
-const args = process.argv.slice(2);
 const ok = (m) => console.log(`\x1b[32m✔\x1b[0m ${m}`);
 const warn = (m) => console.log(`\x1b[33m!\x1b[0m ${m}`);
 const fail = (m) => {
@@ -67,16 +74,17 @@ async function installLocal(baseUrl) {
   const claudeDir = join(homedir(), ".claude");
   const hookDir = join(claudeDir, "hooks", "shared-memory");
   mkdirSync(hookDir, { recursive: true });
-  for (const f of HOOK_FILES) copyFileSync(join(here, "hooks", f), join(hookDir, f));
+  const settingsPath = join(claudeDir, "settings.json");
+  const settings = readJson(settingsPath);
+  const check = wantsCheck(settings);
+  for (const f of [...HOOK_FILES, ...(check ? ["reply-check.mjs"] : [])]) copyFileSync(join(here, "hooks", f), join(hookDir, f));
   ok(`Hooks copied to ${hookDir}`);
 
   const hookCmd = (f) => `node "${join(hookDir, f).replace(/\\/g, "/")}"`;
-  const settingsPath = join(claudeDir, "settings.json");
-  const settings = readJson(settingsPath);
   settings.env = { ...(settings.env || {}), SHARED_MEMORY_URL: base };
-  setHooks(settings, hookCmd("memory-start.mjs"), hookCmd("memory-sync.mjs"));
+  setHooks(settings, hookCmd("memory-start.mjs"), hookCmd("memory-sync.mjs"), check ? hookCmd("reply-check.mjs") : null);
   writeJson(settingsPath, settings);
-  ok(`Hooks + SHARED_MEMORY_URL added to ${settingsPath}`);
+  ok(`Hooks + SHARED_MEMORY_URL added to ${settingsPath}${check ? " (with reply check)" : ""}`);
 
   upsertBlock(join(claudeDir, "CLAUDE.md"), USER_BLOCK);
   ok("Memory instructions added to ~/.claude/CLAUDE.md");
@@ -107,15 +115,16 @@ function installRepo(repoArg) {
   const repo = resolve(repoArg);
   if (!existsSync(repo)) fail(`${repo} does not exist.`);
 
+  const settingsPath = join(repo, ".claude", "settings.json");
+  const settings = readJson(settingsPath);
+  const check = wantsCheck(settings);
   const hookDir = join(repo, ".claude", "hooks", "shared-memory");
   mkdirSync(hookDir, { recursive: true });
-  for (const f of HOOK_FILES) copyFileSync(join(here, "hooks", f), join(hookDir, f));
+  for (const f of [...HOOK_FILES, ...(check ? ["reply-check.mjs"] : [])]) copyFileSync(join(here, "hooks", f), join(hookDir, f));
 
   // --remote-only: these hooks only act in cloud sessions, so they never double up with the hooks on your computer.
   const hookCmd = (f) => `node "$CLAUDE_PROJECT_DIR/.claude/hooks/shared-memory/${f}" --remote-only`;
-  const settingsPath = join(repo, ".claude", "settings.json");
-  const settings = readJson(settingsPath);
-  setHooks(settings, hookCmd("memory-start.mjs"), hookCmd("memory-sync.mjs"));
+  setHooks(settings, hookCmd("memory-start.mjs"), hookCmd("memory-sync.mjs"), check ? hookCmd("reply-check.mjs") : null);
   writeJson(settingsPath, settings);
 
   // The URL is read from an environment variable, so your secret token is never committed.
@@ -134,7 +143,7 @@ function installRepo(repoArg) {
   console.log(`
 Files added or updated (commit and push them):
   .claude/hooks/shared-memory/memory-start.mjs
-  .claude/hooks/shared-memory/memory-sync.mjs
+  .claude/hooks/shared-memory/memory-sync.mjs${check ? "\n  .claude/hooks/shared-memory/reply-check.mjs" : ""}
   .claude/settings.json
   .mcp.json
   CLAUDE.md
@@ -169,16 +178,21 @@ function uninstall() {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-function setHooks(settings, startCmd, syncCmd) {
+function setHooks(settings, startCmd, syncCmd, checkCmd = null) {
   settings.hooks = settings.hooks || {};
-  for (const [event, cmd] of [
-    ["SessionStart", startCmd],
-    ["Stop", syncCmd],
+  const ours = (h) => /shared-memory\/(memory-|reply-check)/.test(String(h.command || ""));
+  for (const [event, cmds] of [
+    ["SessionStart", [startCmd]],
+    ["Stop", [syncCmd, checkCmd]],
+    ["SubagentStop", [checkCmd]],
   ]) {
     const groups = (settings.hooks[event] || [])
-      .map((g) => ({ ...g, hooks: (g.hooks || []).filter((h) => !String(h.command || "").includes("shared-memory/memory-")) }))
+      .map((g) => ({ ...g, hooks: (g.hooks || []).filter((h) => !ours(h)) }))
       .filter((g) => g.hooks.length);
-    if (cmd) groups.push({ hooks: [{ type: "command", command: cmd, timeout: event === "Stop" ? 20 : 15 }] });
+    for (const cmd of cmds.filter(Boolean)) {
+      const timeout = event === "SessionStart" ? 15 : cmd.includes("reply-check") ? 10 : 20;
+      groups.push({ hooks: [{ type: "command", command: cmd, timeout }] });
+    }
     if (groups.length) settings.hooks[event] = groups;
     else delete settings.hooks[event];
   }
